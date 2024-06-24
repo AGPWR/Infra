@@ -1,0 +1,153 @@
+- hosts: app
+  name: Configure App VM
+  become: true
+  vars:
+    container_count: 1
+    default_container_name: front-app
+    default_container_image: genzoo/front-image
+    default_container_command: sleep 1
+  tasks:
+    - name: Install aptitude
+      apt:
+        name: aptitude
+        state: latest
+        update_cache: true
+
+    - name: Install required system packages
+      apt:
+        pkg:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+          - python3-pip
+          - virtualenv
+          - python3-setuptools
+        state: latest
+        update_cache: true
+
+    - name: Add Docker GPG apt Key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Update apt and install docker-ce
+      apt:
+        name: docker-ce
+        state: latest
+        update_cache: true
+
+    - name: Install Docker Module for Python
+      pip:
+        name: docker
+
+    - name: Pull default Docker image
+      community.docker.docker_image:
+        name: "{{ default_container_image }}"
+        source: pull
+
+    - name: Create default containers
+      community.docker.docker_container:
+        name: "{{ default_container_name }}{{ item }}"
+        image: "{{ default_container_image }}"
+        command: "{{ default_container_command }}"
+        state: started
+        restart_policy: always
+        published_ports:
+          - "3000:3000"
+      with_sequence: count={{ container_count }}
+
+    - name: Download node exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.8.1/node_exporter-1.8.1.linux-amd64.tar.gz
+        dest: /tmp/node_exporter-1.8.1.linux-amd64.tar.gz
+
+    - name: Extract node exporter
+      unarchive:
+        src: /tmp/node_exporter-1.8.1.linux-amd64.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Run node exporter
+      command: /opt/node_exporter-1.8.1.linux-amd64/node_exporter
+      async: 30
+      poll: 0
+      tags: node_exporter
+
+- hosts: monitoring
+  name: Configure Monitoring VM
+  become: true
+  vars:
+    prometheus_version: "2.41.0"
+    grafana_version: "9.0.5"
+  tasks:
+    - name: Download Prometheus
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz
+        dest: /tmp/prometheus.tar.gz
+
+    - name: Extract Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Create Prometheus configuration file
+      copy:
+        dest: /opt/prometheus-{{ prometheus_version }}.linux-amd64/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+            - job_name: 'node_exporter'
+              static_configs:
+                - targets: ['{{ hostvars['app']['ansible_host'] }}:9100']
+
+    - name: Create prometheus service
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus
+          After=network.target
+
+          [Service]
+          User=root
+          ExecStart=/opt/prometheus-{{ prometheus_version }}.linux-amd64/prometheus --config.file=/opt/prometheus-{{ prometheus_version }}.linux-amd64/prometheus.yml
+          Restart=always
+
+          [Install]
+          WantedBy=default.target
+
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Enable and start prometheus service
+      service:
+        name: prometheus
+        state: started
+        enabled: yes
+
+    - name: Download Grafana
+      get_url:
+        url: https://dl.grafana.com/oss/release/grafana_{{ grafana_version }}_amd64.deb
+        dest: /tmp/grafana.deb
+
+    - name: Install Grafana
+      apt:
+        deb: /tmp/grafana.deb
+        state: present
+
+    - name: Start Grafana service
+      service:
+        name: grafana-server
+        state: started
+        enabled: yes
