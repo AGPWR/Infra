@@ -5,4 +5,4 @@ This project is a Continuous Integration/Continuous Deployment (CI/CD) pipeline 
 ## CI/CD Ver 1.0
 ![CI/CD](https://github.com/AGPWR/Infra/blob/main/infrastructure_graph.png)
 
-# [Appliction rep](https://github.com/AGPWR/Front)
+# [Appliction repository](https://github.com/AGPWR/Front)
